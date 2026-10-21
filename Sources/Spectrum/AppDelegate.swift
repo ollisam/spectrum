@@ -23,9 +23,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.delegate = self
         statusItem.menu = menu
 
-        hotKey = HotKey(keyCode: kVK_ISO_Section, modifiers: cmdKey) { [weak self] in
-            self?.togglePicker()
-        }
+        registerHotKey()
 
         picker.onPick = { [weak self] color, point in self?.didPick(color, at: point) }
         picker.onError = { [weak self] _ in self?.showPermissionAlert() }
@@ -33,7 +31,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let defaults = UserDefaults.standard
         if !defaults.bool(forKey: "launchedBefore") {
             defaults.set(true, forKey: "launchedBefore")
-            Toast.show(title: "Spectrum is ready", detail: "Press ⌘§ to pick a color", duration: 3)
+            Toast.show(title: "Spectrum is ready", detail: "Press \(Shortcut.saved.display) to pick a color", duration: 3)
         }
         if !CGPreflightScreenCaptureAccess() {
             CGRequestScreenCaptureAccess()
@@ -83,8 +81,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()
 
-        let pickItem = NSMenuItem(title: "Pick Color", action: #selector(startPicking), keyEquivalent: "§")
-        pickItem.keyEquivalentModifierMask = .command
+        let shortcut = Shortcut.saved
+        let pickItem = NSMenuItem(title: "Pick Color", action: #selector(startPicking),
+                                  keyEquivalent: hotKey == nil ? "" : shortcut.character ?? "")
+        pickItem.keyEquivalentModifierMask = shortcut.modifierFlags
         pickItem.image = NSImage(systemSymbolName: "eyedropper", accessibilityDescription: nil)
         pickItem.target = self
         menu.addItem(pickItem)
@@ -116,6 +116,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
 
         menu.addItem(.separator())
+        let shortcutItem = NSMenuItem(title: "Change Shortcut…", action: #selector(changeShortcut), keyEquivalent: "")
+        shortcutItem.target = self
+        menu.addItem(shortcutItem)
+
         let login = NSMenuItem(title: "Open at Login", action: #selector(toggleLoginItem), keyEquivalent: "")
         login.target = self
         login.state = SMAppService.mainApp.status == .enabled ? .on : .off
@@ -162,6 +166,50 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             alert.messageText = "Couldn’t change login item"
             alert.informativeText = "Move Spectrum to your Applications folder and try again.\n\n\(error.localizedDescription)"
             alert.runModal()
+        }
+    }
+
+    // MARK: - Shortcut
+
+    private func registerHotKey() {
+        hotKey = nil
+        hotKey = HotKey(keyCode: Shortcut.saved.keyCode, modifiers: Shortcut.saved.modifiers) { [weak self] in
+            self?.togglePicker()
+        }
+    }
+
+    @objc private func changeShortcut() {
+        // Unregister so pressing the current shortcut is recorded instead of starting a pick.
+        hotKey = nil
+        let previous = Shortcut.saved
+
+        NSApp.activate()
+        let alert = NSAlert()
+        alert.icon = NSImage(systemSymbolName: "keyboard", accessibilityDescription: nil)
+        alert.messageText = "Pick Color Shortcut"
+        alert.informativeText = "Press the keys you want to use. Include ⌘, ⌃ or ⌥."
+        alert.addButton(withTitle: "Save")
+        alert.addButton(withTitle: "Cancel")
+        alert.addButton(withTitle: "Use Default (\(Shortcut.default.display))")
+        let recorder = ShortcutRecorder(shortcut: previous)
+        alert.accessoryView = recorder
+        DispatchQueue.main.async { alert.window.makeFirstResponder(recorder) }
+
+        switch alert.runModal() {
+        case .alertFirstButtonReturn: Shortcut.saved = recorder.shortcut
+        case .alertThirdButtonReturn: Shortcut.saved = .default
+        default: break
+        }
+        registerHotKey()
+
+        if hotKey == nil {
+            let failed = Shortcut.saved
+            Shortcut.saved = previous
+            registerHotKey()
+            let warning = NSAlert()
+            warning.messageText = "\(failed.display) is already in use"
+            warning.informativeText = "Another app has claimed that shortcut. Spectrum is still using \(previous.display)."
+            warning.runModal()
         }
     }
 
